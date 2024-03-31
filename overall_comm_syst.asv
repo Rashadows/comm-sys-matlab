@@ -1,0 +1,91 @@
+%/
+created
+%
+
+% % % bits to waveform % % % 
+tx_msg = 'Hey'; % must be single quotation
+SPB = 1; 
+
+% % % text to bitseq % % %
+tx_bs=text2bitseq(tx_msg);
+
+% % % bitseq to waveform % % %
+tx_wave = bitseq2waveform(tx_bs,SPB);
+
+% tx_wave = satisfy_protocol(tx_wave,SPB);
+
+% % % framing the info % % %
+
+block_length = 1680;
+if length(tx_wave) > block_length
+    framed = [1 tx_wave(1: 1280) 0];
+else
+    m = block_length - length(tx_wave);
+    framed = [1 tx_wave zeros(1, m) 0];
+end
+
+ready_tx = add_training(framed); % add a training sequence
+
+% % % channel properties % % % 
+
+ch = Channel;
+% Assuming the measurements of the transmitter and receiver waveforms are synchronized
+ch.type = "noisy";
+% distance from transmitter to receiver
+ch.distance = 1; 
+
+% channel parameters
+c = 0.2301;
+d = 151;
+k = 0.5989;
+a = 0.8;
+
+% mse = fit_rcv(rx_wave,c,d,k,a); % fit channel output to model
+
+% send over the channel defined above
+rx_wave = txrx(ch,ready_tx);
+
+% % % Noise PDF % % %
+[rx_min,rx_max,sigma] = get_noise_params(ch); % get true noise parameters
+xhist = 0.1:0.01:0.7; % determines the histogram bins
+% for the received signal when IN=0 and IN=1, respectively.
+% histogram(signal_samples(1:640), xhist, "Normalization", "Probability");
+hold on;
+plot_ghist(xhist,rx_min,sigma);     % plot predicted histogram
+
+title(['Histogram of received signals when IN=0']);
+xlabel('Received signal');
+ylabel('Frequency (%)');
+hold off;
+
+
+% % % Equalizer % % %
+eq_wave = zeros(size(rx_wave)); % initialize equalizer output
+
+eq_wave(1) = rx_wave(1);
+for n=2:length(rx_wave)
+    eq_wave(n) = (1/(1-a))*(rx_wave(n)-a*rx_wave(n-1)); 
+   
+end
+
+% % % waveform to bitseq % % %
+rx_bs = waveform2bitseq(eq_wave,SPB,ch, block_length);
+
+% % % bitseq to text % % %
+rx_msg = bitseq2text(rx_bs)
+
+% % % BER calculations % % %
+SPBlist = 1:10;
+distance_list = [8:2:50];           % list of transmission distances
+num_dist = length(distance_list);
+predicted_BER = zeros(1,num_dist);
+
+for i = 1:SPB 
+    thresh = 0.5*(rx_max+rx_min);                % set the optimal threshold
+    predicted_BER(i) = 0.5*(qfunc((thresh-rx_min)/sigma)+(1-qfunc((thresh-rx_max)/sigma)));
+    SNR(i) = 10*log10(((rx_max-rx_min)/(2*sigma))^2);
+end
+
+Fs = 500e3;
+bitratelist = (Fs*ones(1,length(SPBlist))./ SPBlist)*1e-6;  % bitrate(in MHz/s) = Fs / SPB
+
